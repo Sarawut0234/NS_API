@@ -23,21 +23,26 @@ function getClientIp(req) {
 }
 
 app.get("/verify", async (req, res) => {
-  const licenseKey = req.query.key;
-  const scriptName = req.query.script;
+  const licenseKey = String(req.query.key || "").trim();
+  const scriptName = String(req.query.script || "").trim();
 
-  if (!licenseKey || !scriptName) {
+  if (!licenseKey) {
     return res.status(400).json({ status: "failed" });
   }
 
   const clientIp = getClientIp(req);
 
   try {
-    const [rows] = await pool.execute(
-      "SELECT allowed_ip FROM licenses WHERE license_key = ? AND script_name = ?",
-      [licenseKey, scriptName]
-    );
+    let query = "SELECT allowed_ip FROM licenses WHERE license_key = ?";
+    const params = [licenseKey];
 
+    // Backward-compatible: if script is provided, filter by script_name too.
+    if (scriptName) {
+      query += " AND script_name = ?";
+      params.push(scriptName);
+    }
+
+    const [rows] = await pool.execute(query, params);
     const matched = rows.some((row) => normalizeIp(row.allowed_ip) === clientIp);
 
     return res.json({ status: matched ? "success" : "failed" });
