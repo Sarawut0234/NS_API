@@ -9,7 +9,17 @@ app.set("trust proxy", true);
 
 function normalizeIp(ip) {
   if (!ip) return "";
-  return String(ip).trim().replace(/^::ffff:/, "");
+
+  let value = String(ip).trim();
+  value = value.replace(/^::ffff:/i, "");
+
+  // Strip :port from IPv4 if present (e.g. 1.2.3.4:12345)
+  const hostWithPort = value.match(/^([0-9]{1,3}(?:\.[0-9]{1,3}){3}):(\d+)$/);
+  if (hostWithPort) {
+    value = hostWithPort[1];
+  }
+
+  return value;
 }
 
 function getClientIp(req) {
@@ -27,7 +37,7 @@ app.get("/verify", async (req, res) => {
   const scriptName = String(req.query.script || "").trim();
 
   if (!licenseKey) {
-    return res.status(400).json({ status: "failed" });
+    return res.status(400).json({ status: "failed", reason: "missing_key" });
   }
 
   const clientIp = getClientIp(req);
@@ -43,12 +53,28 @@ app.get("/verify", async (req, res) => {
     }
 
     const [rows] = await pool.execute(query, params);
-    const matched = rows.some((row) => normalizeIp(row.allowed_ip) === clientIp);
 
-    return res.json({ status: matched ? "success" : "failed" });
+    if (!rows.length) {
+      return res.json({ status: "failed", reason: "license_not_found" });
+    }
+
+    const matched = rows.some((row) => {
+      const allowed = normalizeIp(row.allowed_ip);
+      return allowed === "*" || allowed === clientIp;
+    });
+
+    if (!matched) {
+      return res.json({
+        status: "failed",
+        reason: "ip_mismatch",
+        client_ip: clientIp
+      });
+    }
+
+    return res.json({ status: "success" });
   } catch (error) {
     console.error("Database error:", error.message);
-    return res.status(500).json({ status: "failed" });
+    return res.status(500).json({ status: "failed", reason: "server_error" });
   }
 });
 
